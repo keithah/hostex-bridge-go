@@ -32,7 +32,7 @@ func (p *Portal) UpdateInfo(info hostexapi.Conversation) {
     p.Info = info
 }
 
-func (p *Portal) CreateMatrixRoom(ctx context.Context) error {
+func (p *Portal) CreateMatrixRoom() error {
     if p.RoomID != "" {
         return nil
     }
@@ -53,6 +53,7 @@ func (p *Portal) CreateMatrixRoom(ctx context.Context) error {
         Topic:      fmt.Sprintf("Hostex conversation for %s", p.Info.PropertyTitle),
     }
 
+    ctx := context.Background()
     resp, err := p.bridge.MatrixClient.CreateRoom(ctx, createRoom)
     if err != nil {
         return fmt.Errorf("failed to create Matrix room: %w", err)
@@ -67,7 +68,7 @@ func (p *Portal) CreateMatrixRoom(ctx context.Context) error {
     }
 
     if p.bridge.Config.PersonalSpaceEnable {
-        err = p.addToPersonalSpace(ctx)
+        err = p.addToPersonalSpace()
         if err != nil {
             p.bridge.Logger.Error("Failed to add room to personal space", zap.Error(err))
         }
@@ -76,7 +77,8 @@ func (p *Portal) CreateMatrixRoom(ctx context.Context) error {
     return nil
 }
 
-func (p *Portal) addToPersonalSpace(ctx context.Context) error {
+func (p *Portal) addToPersonalSpace() error {
+    ctx := context.Background()
     _, err := p.bridge.MatrixClient.SendStateEvent(ctx, p.bridge.spaceRoom, event.StateSpaceChild, p.RoomID.String(), &event.SpaceChildEventContent{
         Via: []string{p.bridge.Config.Homeserver.Domain},
     })
@@ -86,7 +88,7 @@ func (p *Portal) addToPersonalSpace(ctx context.Context) error {
     return nil
 }
 
-func (p *Portal) HandleMatrixMessage(ctx context.Context, evt *event.Event) {
+func (p *Portal) HandleMatrixMessage(evt *event.Event) {
     if evt.Type != event.EventMessage {
         return
     }
@@ -111,7 +113,7 @@ func (p *Portal) HandleMatrixMessage(ctx context.Context, evt *event.Event) {
     }
 }
 
-func (p *Portal) BackfillMessages(ctx context.Context) error {
+func (p *Portal) BackfillMessages() error {
     lastTimestamp, err := p.bridge.DB.GetLastMessageTimestamp(p.ID)
     if err != nil {
         return fmt.Errorf("failed to get last message timestamp: %w", err)
@@ -123,7 +125,7 @@ func (p *Portal) BackfillMessages(ctx context.Context) error {
     }
 
     for _, msg := range messages {
-        err = p.SendMessage(ctx, msg)
+        err = p.SendMessage(msg)
         if err != nil {
             p.bridge.Logger.Error("Failed to send backfilled message", zap.Error(err))
         }
@@ -132,7 +134,7 @@ func (p *Portal) BackfillMessages(ctx context.Context) error {
     return nil
 }
 
-func (p *Portal) SendMessage(ctx context.Context, msg hostexapi.Message) error {
+func (p *Portal) SendMessage(msg hostexapi.Message) error {
     content := &event.MessageEventContent{
         MsgType: event.MsgText,
         Body:    msg.Content,
@@ -146,15 +148,10 @@ func (p *Portal) SendMessage(ctx context.Context, msg hostexapi.Message) error {
     }
     timestamp := msg.Timestamp.In(loc)
 
-    resp, err := p.bridge.MatrixClient.SendMessageEvent(ctx, p.RoomID, event.EventMessage, content, mautrix.ReqSendEvent{Timestamp: timestamp.UnixNano() / 1e6})
+    ctx := context.Background()
+    _, err = p.bridge.MatrixClient.SendMessageEvent(ctx, p.RoomID, event.EventMessage, content, mautrix.ReqSendEvent{Timestamp: timestamp.UnixNano() / 1e6})
     if err != nil {
         return fmt.Errorf("failed to send Matrix message: %w", err)
-    }
-
-    // Store message in database
-    err = p.bridge.DB.StoreMessage(p.ID, resp.EventID, timestamp, msg.Sender, msg.Content)
-    if err != nil {
-        p.bridge.Logger.Error("Failed to store message in database", zap.Error(err))
     }
 
     return nil

@@ -51,19 +51,8 @@ func (b *Bridge) Start() error {
 
     ctx := context.Background()
 
-    // Login to Matrix
-    _, err := b.MatrixClient.Login(ctx, &mautrix.ReqLogin{
-        Type:             "m.login.password",
-        Identifier:       mautrix.UserIdentifier{Type: "m.id.user", User: b.Config.User.UserID},
-        Password:         b.Config.Appservice.ASToken,
-        DeviceID:         "HostexBridge",
-        StoreCredentials: true,
-    })
-    if err != nil {
-        return fmt.Errorf("failed to log in to Matrix: %w", err)
-    }
-
     // Create or find management room
+    var err error
     b.managementRoom, err = b.createOrFindManagementRoom(ctx)
     if err != nil {
         return fmt.Errorf("failed to create or find management room: %w", err)
@@ -135,9 +124,9 @@ func (b *Bridge) createOrFindPersonalSpace(ctx context.Context) (id.RoomID, erro
 
     for _, roomID := range rooms.JoinedRooms {
         // Check if this is the personal space
-        var typeContent event.ContentRoomType
-        err := b.MatrixClient.StateEvent(ctx, roomID, event.TypeRoomType, "", &typeContent)
-        if err == nil && typeContent.Type == "m.space" {
+        var createContent event.CreateEventContent
+        err := b.MatrixClient.StateEvent(ctx, roomID, event.StateCreate, "", &createContent)
+        if err == nil && createContent.Type == "m.space" {
             var nameContent event.RoomNameEventContent
             err := b.MatrixClient.StateEvent(ctx, roomID, event.StateRoomName, "", &nameContent)
             if err == nil && nameContent.Name == "Hostex Conversations" {
@@ -156,10 +145,10 @@ func (b *Bridge) createOrFindPersonalSpace(ctx context.Context) (id.RoomID, erro
         },
         InitialState: []*event.Event{
             {
-                Type: event.TypeRoomType,
+                Type: event.StateCreate,
                 Content: event.Content{
-                    Parsed: &event.ContentRoomType{
-                        Type: "m.space",
+                    Raw: map[string]interface{}{
+                        "type": "m.space",
                     },
                 },
             },
@@ -177,9 +166,9 @@ func (b *Bridge) startSyncing() {
     defer b.wg.Done()
 
     syncer := b.MatrixClient.Syncer.(*mautrix.DefaultSyncer)
-    syncer.OnEventType(event.EventMessage, mautrix.EventHandler(func(source mautrix.EventSource, evt *event.Event) {
+    syncer.OnEventType(event.EventMessage, func(evt *event.Event) {
         b.handleMatrixMessage(evt)
-    }))
+    })
 
     for {
         select {
@@ -232,14 +221,13 @@ func (b *Bridge) handleHostexConversation(conv hostexapi.Conversation) {
     }
 
     portal.UpdateInfo(conv)
-    ctx := context.Background()
-    err := portal.CreateMatrixRoom(ctx)
+    err := portal.CreateMatrixRoom()
     if err != nil {
         b.Logger.Error("Failed to create Matrix room", zap.Error(err))
         return
     }
 
-    err = portal.BackfillMessages(ctx)
+    err = portal.BackfillMessages()
     if err != nil {
         b.Logger.Error("Failed to backfill messages", zap.Error(err))
     }
@@ -257,8 +245,7 @@ func (b *Bridge) handleMatrixMessage(evt *event.Event) {
         return
     }
 
-    ctx := context.Background()
-    portal.HandleMatrixMessage(ctx, evt)
+    portal.HandleMatrixMessage(evt)
 }
 
 func (b *Bridge) handleManagementCommand(evt *event.Event) {
